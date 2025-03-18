@@ -7,10 +7,12 @@
 
 // Constants
 #define MS_TICKS 48000UL
-#define TIMEOUT_MS 500UL
 #define LED_FLASH_MS 1000UL
-#define SLEEP_INTERVAL_MS 1000
+#define SLEEP_INTERVAL_MS 60000
 #define COMMAND_TIMEOUT_MS 5000
+#define FIXED_MESSAGE_LENGTH 19
+#define BYTE_TIMEOUT_MS 50    // Timeout for each byte read
+#define TOTAL_TIMEOUT_MS 1000 // Timeout for the entire read operation
 
 // Common Commands
 //  Declare but do not define global variables

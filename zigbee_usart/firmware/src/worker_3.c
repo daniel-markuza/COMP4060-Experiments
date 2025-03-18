@@ -7,7 +7,7 @@
 #include <xc.h>
 #include "utils.h"
 
-void worker_2_main(void)
+void worker_3_main(void)
 {
   systemInitialize();
 
@@ -39,7 +39,7 @@ void worker_2_main(void)
   // Send start message with initial timestamp
   uint32_t startTime = getMsCount();
 
-  int messageLength = snprintf((char *)messageToSend, FIXED_MESSAGE_LENGTH, "2_START:%010lu", startTime);
+  int messageLength = snprintf((char *)messageToSend, FIXED_MESSAGE_LENGTH, "3_START:%010lu", startTime);
 
   // Padding to ensure exactly 19 bytes including the carriage return
   if (messageLength < FIXED_MESSAGE_LENGTH - 1)
@@ -109,7 +109,7 @@ void worker_2_main(void)
     // Prepare and send the raw message with voltage and timestamp
     uint32_t elapsedTime = getMsCount() - startTime;
 
-    messageLength = snprintf((char *)messageToSend, FIXED_MESSAGE_LENGTH, "2_T%010luV%s", elapsedTime, voltage);
+    messageLength = snprintf((char *)messageToSend, FIXED_MESSAGE_LENGTH, "3_T%010luV%s", elapsedTime, voltage);
 
     // Padding to ensure exactly 19 bytes including the carriage return
     if (messageLength < FIXED_MESSAGE_LENGTH - 1)
@@ -134,8 +134,5 @@ void worker_2_main(void)
     }
 
     printf("Sent voltage message: %s\r\n", messageToSend);
-
-    delayMs(SLEEP_INTERVAL_MS);
   }
 }
-

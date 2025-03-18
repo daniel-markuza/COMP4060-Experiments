@@ -178,6 +178,7 @@
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.h</itemPath>
       <itemPath>../src/worker_1.h</itemPath>
       <itemPath>../src/worker_2.h</itemPath>
+      <itemPath>../src/worker_3.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -285,6 +286,7 @@
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.c</itemPath>
       <itemPath>../src/worker_1.c</itemPath>
       <itemPath>../src/worker_2.c</itemPath>
+      <itemPath>../src/worker_3.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
@@ -305,8 +307,8 @@
         <platform>4</platform>
       </toolsSet>
       <packs>
-        <pack name="CMSIS" vendor="ARM" version="5.4.0"/>
         <pack name="SAME51_DFP" vendor="Microchip" version="3.6.130"/>
+        <pack name="CMSIS" vendor="ARM" version="5.4.0"/>
       </packs>
       <ScriptingSettings>
       </ScriptingSettings>

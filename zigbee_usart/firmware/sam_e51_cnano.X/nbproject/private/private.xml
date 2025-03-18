@@ -3,10 +3,13 @@
     <editor-bookmarks xmlns="http://www.netbeans.org/ns/editor-bookmarks/2" lastBookmarkId="0"/>
     <open-files xmlns="http://www.netbeans.org/ns/projectui-open-files/2">
         <group>
-            <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/worker.c</file>
+            <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/worker_1.c</file>
+            <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/worker_2.c</file>
+            <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/worker_3.c</file>
             <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/utils.c</file>
-            <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/utils.h</file>
             <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/main_sam_e51_cnano.c</file>
+            <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/utils.h</file>
+            <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/click_routines/usb_uart/usb_uart_example.c</file>
         </group>
     </open-files>
 </project-private>

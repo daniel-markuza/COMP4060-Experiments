@@ -33,15 +33,29 @@ void worker_1_main(void)
     return;
   }
 
-  uint8_t messageToSend[30];
+  uint8_t messageToSend[FIXED_MESSAGE_LENGTH];
   char voltage[5] = "0000"; // Buffer for 4-digit voltage plus null terminator
 
   // Send start message with initial timestamp
   uint32_t startTime = getMsCount();
 
-  sprintf((char *)messageToSend, "1_START:%010lu\r", startTime);
-  if (!sendCommandAndReadResponse(valid_command_rdatab, "Start rdatab command", readChars, sizeof(readChars)) ||
-      !sendCommandAndReadResponse(messageToSend, "Write raw start message", readChars, sizeof(readChars)))
+  int messageLength = snprintf((char *)messageToSend, FIXED_MESSAGE_LENGTH, "1_START:%010lu", startTime);
+
+  // Padding to ensure exactly 19 bytes including the carriage return
+  if (messageLength < FIXED_MESSAGE_LENGTH - 1)
+  {
+    memset(messageToSend + messageLength, ' ', FIXED_MESSAGE_LENGTH - messageLength - 1);
+  }
+  messageToSend[FIXED_MESSAGE_LENGTH - 1] = '\r'; // Ensure termination
+
+  if (!sendCommandAndReadResponse(valid_command_rdatab, "Start rdatab command", readChars, sizeof(readChars)))
+  {
+    printf("Error: Failed to initiate rdatab for start message.\r\n");
+    return;
+  }
+  delayMs(50);
+
+  if (!sendCommandAndReadResponse(messageToSend, "Write start raw message", readChars, sizeof(readChars)))
   {
     printf("Error: Failed to send start message.\r\n");
     return;
@@ -57,8 +71,6 @@ void worker_1_main(void)
       printf("Error: Failed to wake device.\r\n");
       continue;
     }
-
-    delayMs(1000); // Ensure device is fully awake
 
     printf("Awake and checking battery voltage...\r\n");
 
@@ -101,8 +113,16 @@ void worker_1_main(void)
       strcpy(voltage, "0000");
     }
 
-    uint32_t currentTime = getMsCount();
-    sprintf((char *)messageToSend, "1_T%010luV%s\r", currentTime, voltage);
+    uint32_t elapsedTime = getMsCount() - startTime;
+
+    messageLength = snprintf((char *)messageToSend, FIXED_MESSAGE_LENGTH, "1_T%010luV%s", elapsedTime, voltage);
+
+    // Padding to ensure exactly 19 bytes including the carriage return
+    if (messageLength < FIXED_MESSAGE_LENGTH - 1)
+    {
+      memset(messageToSend + messageLength, ' ', FIXED_MESSAGE_LENGTH - messageLength - 1);
+    }
+    messageToSend[FIXED_MESSAGE_LENGTH - 1] = '\r'; // Properly terminate
 
     if (!sendCommandAndReadResponse(valid_command_rdatab, "Start rdatab command", readChars, sizeof(readChars)))
     {
@@ -117,6 +137,7 @@ void worker_1_main(void)
       printf("Error: Failed to send voltage message.\r\n");
       continue;
     }
+    delayMs(50);
 
     printf("Sent voltage message: %s\r\n", messageToSend);
 
@@ -127,7 +148,6 @@ void worker_1_main(void)
       continue;
     }
 
-    // Non-blocking 60-second wait
-    delayMs(60000);
+    delayMs(SLEEP_INTERVAL_MS);
   }
 }

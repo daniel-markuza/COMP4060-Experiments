@@ -14,7 +14,7 @@ uint8_t join_own_network[] = "AT+EN\r";
 uint8_t join_existing_network[] = "AT+JPAN:20,2EAD\r";
 uint8_t network_info[] = "AT+N?\r";
 uint8_t disassociate[] = "AT+DASSL\r";
-uint8_t change_channel[] = "AT+CCHANGE:14\r";
+uint8_t change_channel[] = "AT+CCHANGE:1A\r";
 uint8_t set_power_mode_3[] = "ATS39=0003\r";       // Set power mode to 3 (sleep)
 uint8_t enter_command_mode[] = "+++\r";            // Command to wake up
 uint8_t check_voltage[] = "ATS3D?\r";              // Check battery voltage
@@ -64,9 +64,8 @@ void doInputOutput()
 // Function to read all bytes with timeout
 size_t readAllBytesWithTimeout(uint8_t *buffer, size_t maxBufferSize)
 {
-    uint8_t tempByte;
     size_t count = 0;
-    uint32_t startTime = msCount;
+    uint32_t totalStartTime = msCount;
 
     if (buffer == NULL || maxBufferSize == 0)
     {
@@ -76,24 +75,35 @@ size_t readAllBytesWithTimeout(uint8_t *buffer, size_t maxBufferSize)
 
     while (count < maxBufferSize - 1)
     {
-        if (SERCOM4_USART_Read(&tempByte, 1))
+        // Check for overall timeout
+        if ((msCount - totalStartTime) >= TOTAL_TIMEOUT_MS)
         {
+            printf("Overall timeout occurred while reading.\r\n");
+            break;
+        }
+
+        // Attempt to read a single byte
+        if (SERCOM4_USART_Read(&buffer[count], 1))
+        {
+            // Wait for the read operation to complete with a per-byte timeout
+            uint32_t byteStartTime = msCount;
             while (SERCOM4_USART_ReadIsBusy())
             {
-                if ((msCount - startTime) >= TIMEOUT_MS)
+                if ((msCount - byteStartTime) >= BYTE_TIMEOUT_MS)
                 {
+                    printf("Timeout while waiting for byte to complete.\r\n");
                     buffer[count] = '\0';
                     return count;
                 }
+                __WFI(); // Wait for interrupt to avoid busy-waiting
             }
 
-            buffer[count] = tempByte;
-            count++;
-            startTime = msCount; // Reset start time for the next byte
+            count++;                  // Successfully read a byte
+            totalStartTime = msCount; // Reset overall timeout for fresh data
         }
         else
         {
-            break;
+            __WFI(); // No data available, wait for interrupt
         }
     }
 
@@ -126,6 +136,7 @@ bool sendCommandAndReadResponse(uint8_t *command, const char *description, uint8
     }
 
     printf("%s: %s\r\n", description, readBuffer);
+    delayMs(100);
     return true;
 }
 

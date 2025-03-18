@@ -121,7 +121,7 @@ void usb_uart_example(void)
   // preload loop
   // start reading
   usb_uart_USART_Read((uint8_t *)&read_chars, 1);
-  printf("Let's go\n");
+  printf("Let's go\r\n");
   while (1)
   {
     // wait for an interrupt
