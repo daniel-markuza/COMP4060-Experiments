@@ -53,6 +53,7 @@
 #include "worker_1.h"
 #include "worker_2.h"
 #include "worker_3.h"
+#include "leach.h"
 #include "click_routines/usb_uart/usb_uart_example.h"
 
 // *****************************************************************************
@@ -66,14 +67,15 @@ int main(void)
   /* Initialize all modules */
   SYS_Initialize(NULL);
 
-//    usb_uart_example();
+//  usb_uart_example();
   //    worker_1_main();
   //    worker_2_main();
-  worker_3_main();
+  //  worker_3_main();
+    leach_init();
 
   while (true)
   {
-    ;
+          leach_main_loop();
   }
 
   /* Execution should not come here during normal operation */

@@ -9,6 +9,7 @@
 volatile uint32_t msCount = 0;
 
 // Commands
+uint8_t get_id[] = "ATI\r";
 uint8_t restart[] = "ATZ\r";
 uint8_t join_own_network[] = "AT+EN\r";
 uint8_t join_existing_network[] = "AT+JPAN:20,2EAD\r";
@@ -78,7 +79,7 @@ size_t readAllBytesWithTimeout(uint8_t *buffer, size_t maxBufferSize)
         // Check for overall timeout
         if ((msCount - totalStartTime) >= TOTAL_TIMEOUT_MS)
         {
-            printf("Overall timeout occurred while reading.\r\n");
+//            printf("Overall timeout occurred while reading.\r\n");
             break;
         }
 
@@ -91,7 +92,7 @@ size_t readAllBytesWithTimeout(uint8_t *buffer, size_t maxBufferSize)
             {
                 if ((msCount - byteStartTime) >= BYTE_TIMEOUT_MS)
                 {
-                    printf("Timeout while waiting for byte to complete.\r\n");
+//                    printf("Timeout while waiting for byte to complete.\r\n");
                     buffer[count] = '\0';
                     return count;
                 }
@@ -135,7 +136,7 @@ bool sendCommandAndReadResponse(uint8_t *command, const char *description, uint8
         return false;
     }
 
-    printf("%s: %s\r\n", description, readBuffer);
+//    printf("%s: %s\r\n", description, readBuffer);
     delayMs(100);
     return true;
 }

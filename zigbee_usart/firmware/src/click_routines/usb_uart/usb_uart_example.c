@@ -62,7 +62,6 @@
 #define LED_FLASH_MS 1000UL
 #define PATTERN_LENGTH 14 // Length of "RAW:-xxx,hi\r\n"
 
-
 //// NOTE: this overflows every ~50 days, so I'm not going to care here...
 // volatile uint32_t msCount = 0;
 
@@ -93,7 +92,7 @@ void usb_uart_example(void)
 
   uint8_t read_chars[100];
   uint8_t buffer[10];
-  
+
   usb_uart_USART_Write(restart, 4);
   while (usb_uart_USART_WriteIsBusy())
     ;
@@ -101,7 +100,7 @@ void usb_uart_example(void)
   usb_uart_USART_Read((uint8_t *)&read_chars, 2);
   while (usb_uart_USART_ReadIsBusy())
     ; // do nothing
-  
+
   usb_uart_USART_Write(join_own_network, 6);
   while (usb_uart_USART_WriteIsBusy())
     ;
@@ -146,8 +145,7 @@ void usb_uart_example(void)
         usb_uart_USART_Write((uint8_t *)&buffer[i], 1);
       }
     }
-
-    // handle blinking the light
+    //     handle blinking the light
     handleLEDBlink();
   }
 }

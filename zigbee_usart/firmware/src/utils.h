@@ -16,6 +16,7 @@
 
 // Common Commands
 //  Declare but do not define global variables
+extern uint8_t get_id[];
 extern uint8_t restart[];
 extern uint8_t join_own_network[];
 extern uint8_t join_existing_network[];
