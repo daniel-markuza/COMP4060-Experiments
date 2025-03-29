@@ -57,10 +57,27 @@ static bool queryDeviceID(void)
 
 //----------------------------------------------------------
 // Simple pseudo-random generator: returns a float between 0 and 1.
+static uint32_t computeSeed(void)
+{
+    uint32_t seed = getMsCount(); // Start with the current millisecond count
+    // Mix in the device's unique ID (nodeID)
+    for (size_t i = 0; i < strlen(nodeID); i++)
+    {
+        seed ^= ((uint32_t)nodeID[i]) << (i % 32);
+    }
+    return seed;
+}
+
+static void initRandom(void)
+{
+    srand(computeSeed());
+}
+
 static float getRandomFloat(void)
 {
-    uint32_t seed = getMsCount();
-    return ((float)(seed % 100)) / 100.0f;
+    float x = ((float)rand()) / ((float)RAND_MAX);
+    printf("\r\n%f\r\n", x);
+    return x;
 }
 
 //----------------------------------------------------------
@@ -95,14 +112,14 @@ static bool waitForMessage(const char *expected, uint32_t timeout_ms, char *buff
                 return true;
             }
         }
-        delayMs(10); // Short yield to prevent tight looping.
+        delayMs(10); // Yield briefly.
     }
     return false;
 }
 
 //----------------------------------------------------------
 // Parse a RAW message of the form:
-// "\nRAW:-35,HEARTBEAT,000D6F0018CEE118\r\n" (or with "CH_AD", "JOIN", "DATA", etc.).
+// "\nRAW:-35,CH_AD,000D6F0018CEE118\r\n" (or with "JOIN", "DATA", etc.).
 // Trims whitespace/newlines, tokenizes by commas, and if the second token exactly matches 'keyword',
 // copies the third token (assumed sender's ID) into chID.
 static bool parseRawMessageForKeyword(const char *rawMsg, const char *keyword, char *chID, size_t chIDSize)
@@ -159,7 +176,7 @@ static void blinkMember(void)
 //----------------------------------------------------------
 // Update LED indicator based on current node role.
 // - For CH: LED remains ON permanently (OUTCLR).
-// - For joining nodes (election phase): Blink constantly (500ms on/off).
+// - For joining nodes (election phase): Blink constantly.
 // - For members: LED is handled via blinkMember() after sending data.
 static void updateLEDIndicator(LEACH_Role role)
 {
@@ -193,12 +210,13 @@ static void processRoundStart(void)
         printf("Received ROUND_START message: %s\r\n", msgBuffer);
         roundStartTime = getMsCount();
     }
-    // Otherwise, members wait.
+    // Otherwise, members continue waiting.
 }
 
 //----------------------------------------------------------
 // Elect the node's role for the current round.
 // If random value < CH_PROBABILITY, become a cluster head; otherwise, remain joining.
+// Also, if elected as CH, play a tune using the AT+IDENT command.
 static void electRole(void)
 {
     float r = getRandomFloat();
@@ -210,6 +228,11 @@ static void electRole(void)
         char msg[50];
         sprintf(msg, "CH_AD,%s", nodeID);
         rdatabBroadcastMessage(msg);
+        // Play a tune on a newly elected cluster head.
+        uint8_t identResp[50];
+        char identCmd[64];
+        sprintf(identCmd, "AT+IDENT:%s\r", nodeID);
+        sendCommandAndReadResponse((uint8_t *)identCmd, "AT+IDENT", identResp, sizeof(identResp));
     }
     else
     {
@@ -220,14 +243,16 @@ static void electRole(void)
 }
 
 //----------------------------------------------------------
-// For a joining node, continuously listen for a RAW message containing
-// "CH_AD" until a ROUND_COMPLETE is received.
-// If found, extract the CH ID and send a join request.
+// For a joining node, continuously listen for a RAW message containing "CH_AD"
+// until either a CH advertisement is received or the round duration expires.
+// If a valid CH advertisement is received, send a join request.
+// If the round duration expires without any CH advertisement, time out.
 static void joinCluster(void)
 {
     char rawBuffer[128] = {0};
     char chID[32] = {0};
-    while (true)
+    uint32_t joinStart = getMsCount();
+    while (getMsCount() - joinStart < ROUND_DURATION_MS) // Timeout after one round
     {
         if (waitForMessage("RAW:", 1000, rawBuffer, sizeof(rawBuffer)))
         {
@@ -244,11 +269,13 @@ static void joinCluster(void)
         }
         updateLEDIndicator(nodeRole);
     }
+    // Timeout: no CH advertisement received in this round.
+    printf("Join timeout: No CH advertisement received this round. Will retry in next round.\r\n");
 }
 
 //----------------------------------------------------------
-// For a cluster head, continuously listen for incoming RAW messages
-// containing "JOIN" or "DATA". For JOIN messages, send an ACK_JOIN.
+// For a cluster head, continuously listen for incoming RAW messages containing "JOIN" or "DATA".
+// For JOIN messages, send an ACK_JOIN.
 // For DATA messages, print the sender ID and sensor value.
 static void chListenAndAcknowledge(void)
 {
@@ -303,10 +330,9 @@ static void chListenAndAcknowledge(void)
 }
 
 //----------------------------------------------------------
-// Run the steady-state phase using tracker variables instead of blocking delays.
-// Members periodically send sensor data when due and continuously listen for "ROUND_COMPLETE".
-// The cluster head listens for JOIN/DATA messages,
-// and ends its round when its internal round duration expires.
+// Run the steady-state phase using tracker variables (non-blocking).
+// - Members: periodically send sensor data based on MEMBER_DATA_INTERVAL and continuously listen for ROUND_COMPLETE.
+// - Cluster Head: continuously listen for JOIN/DATA messages, and end steady state based on its own timer.
 static void runSteadyState(void)
 {
     uint32_t lastDataSend = getMsCount();
@@ -316,10 +342,9 @@ static void runSteadyState(void)
     while (true)
     {
         uint32_t now = getMsCount();
-
         if (nodeRole == ROLE_MEMBER)
         {
-            // Send sensor data every MEMBER_DATA_INTERVAL.
+            // Members send sensor data every MEMBER_DATA_INTERVAL.
             if (now - lastDataSend >= MEMBER_DATA_INTERVAL)
             {
                 int reading = 20 * (getRandomFloat() + 1);
@@ -330,7 +355,7 @@ static void runSteadyState(void)
                 blinkMember();
                 lastDataSend = now;
             }
-            // Members check continuously for ROUND_COMPLETE.
+            // Always check for ROUND_COMPLETE.
             if (waitForMessage("ROUND_COMPLETE", 100, syncBuffer, sizeof(syncBuffer)))
             {
                 printf("Member %s received ROUND_COMPLETE. Ending steady state.\r\n", nodeID);
@@ -339,21 +364,21 @@ static void runSteadyState(void)
         }
         else if (nodeRole == ROLE_CLUSTER_HEAD)
         {
-            // Continuously listen for incoming messages (JOIN or DATA).
+            // Continuously listen for JOIN/DATA messages.
             chListenAndAcknowledge();
-            // The CH ends its round when its own steady-state period expires.
+            // CH ends steady state when its timer expires.
             if (now - steadyStart >= (ROUND_DURATION_MS - ROUND_MARGIN))
             {
                 break;
             }
         }
-        delayMs(10); // Short yield.
+        delayMs(10); // Yield briefly.
     }
 }
 
 //----------------------------------------------------------
-// For a synchronized system, only the cluster head controls round completion.
-// The CH, when its steady-state timer expires, broadcasts a "ROUND_COMPLETE" message.
+// Only the cluster head controls round completion.
+// When its steady-state timer expires, the CH broadcasts "ROUND_COMPLETE".
 static void roundComplete(void)
 {
     rdatabBroadcastMessage("ROUND_COMPLETE");
@@ -363,7 +388,7 @@ static void roundComplete(void)
 
 //----------------------------------------------------------
 // Run one complete LEACH round.
-// The cluster head uses its own timer to end the round and broadcasts ROUND_COMPLETE.
+// The CH uses its own timer to end the round and broadcasts ROUND_COMPLETE.
 // Members continuously run their steady-state phase and exit when they receive ROUND_COMPLETE.
 static void runRound(void)
 {
@@ -377,7 +402,10 @@ static void runRound(void)
 
     delayMs(1000); // Allow time for cluster formation.
 
-    // Run steady state with non-blocking tracker-based events.
+    if (nodeRole == ROLE_JOINING)
+    {
+        return;
+    }
     runSteadyState();
 
     // Only the CH broadcasts ROUND_COMPLETE.
@@ -412,6 +440,8 @@ void leach_init(void)
         sprintf(nodeID, "RAND_%lu", getMsCount());
         printf("Fallback Node ID: %s\r\n", nodeID);
     }
+
+    initRandom();
 
     roundStartTime = getMsCount();
     nodeRole = ROLE_IDLE;
