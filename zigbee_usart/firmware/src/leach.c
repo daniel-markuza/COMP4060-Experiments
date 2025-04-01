@@ -11,9 +11,10 @@ static LEACH_Role nodeRole = ROLE_IDLE;
 static uint32_t roundStartTime = 0; // Timestamp marking the start of the current round
 
 // Timing intervals (in ms)
-#define MEMBER_DATA_INTERVAL 5000UL // Members send sensor data every 5000ms
-#define CH_AD_INTERVAL 3000UL       // CH advertises its status every 2000ms
-#define ROUND_MARGIN 3000UL         // End round 3000ms before total round duration
+#define MEMBER_DATA_INTERVAL 5000UL   // Members send sensor data every 5000ms
+#define CH_AD_INTERVAL 3000UL         // CH advertises its status every 3000ms
+#define ROUND_MARGIN 2000UL           // End round 2000ms before total round duration
+#define ROUND_START_TIMEOUT_MS 5000UL // Timeout for waiting for round start message
 
 // Forward declarations
 static bool queryDeviceID(void);
@@ -109,10 +110,14 @@ static bool waitForMessage(const char *expected, uint32_t timeout_ms, char *buff
     memset(buffer, 0, bufferSize);
     while ((getMsCount() - startTime) < timeout_ms)
     {
-        size_t bytesRead = readAllBytesWithTimeout((uint8_t *)buffer, bufferSize);
-        if (bytesRead > 0 && strstr(buffer, expected))
+        size_t bytesRead = readAllBytesWithTimeout((uint8_t *)buffer, bufferSize - 1);
+        if (bytesRead > 0)
         {
-            return true;
+            buffer[bytesRead] = '\0';
+            if (strstr(buffer, expected))
+            {
+                return true;
+            }
         }
         delayMs(10); // Yield briefly.
     }
@@ -175,9 +180,6 @@ static void blinkMember(void)
 
 //----------------------------------------------------------
 // Update LED indicator based on current node role.
-// - For CH: LED remains ON permanently (OUTCLR).
-// - For joining nodes: blink constantly (here we rely on updateLEDIndicator being called in a loop).
-// - For members: handled by blinkMember() after sending data.
 static void updateLEDIndicator(LEACH_Role role)
 {
     switch (role)
@@ -186,11 +188,10 @@ static void updateLEDIndicator(LEACH_Role role)
         PORT_REGS->GROUP[0].PORT_OUTCLR = PORT_PA14; // LED ON permanently
         break;
     case ROLE_JOINING:
-        PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14; // LED OFF
+        PORT_REGS->GROUP[0].PORT_OUTTGL = PORT_PA14; // Toggle LED
         break;
     case ROLE_MEMBER:
         PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14; // temporarily turn off to start the blinking
-        // Members do not update continuously.
         break;
     default:
         PORT_REGS->GROUP[0].PORT_OUTSET = PORT_PA14;
@@ -203,23 +204,36 @@ static void updateLEDIndicator(LEACH_Role role)
 // The cluster head is expected to initiate the round, so members wait.
 static void processRoundStart(void)
 {
-    char msgBuffer[50] = {0};
-    if (waitForMessage("ROUND_START", ROUND_START_TIMEOUT_MS, msgBuffer, sizeof(msgBuffer)))
+    // If we were CH last round, broadcast new round start
+    if (nodeRole == ROLE_CLUSTER_HEAD)
     {
-        printf("Received ROUND_START message: %s\r\n", msgBuffer);
+        rdatabBroadcastMessage("ROUND_START");
         roundStartTime = getMsCount();
+        printf("CH %s initiated new round.\r\n", nodeID);
     }
-    // Otherwise, members continue waiting.
+    else // Members wait for round start message
+    {
+        char msgBuffer[50] = {0};
+        if (waitForMessage("ROUND_START", ROUND_START_TIMEOUT_MS, msgBuffer, sizeof(msgBuffer)))
+        {
+            printf("Received ROUND_START message: %s\r\n", msgBuffer);
+            roundStartTime = getMsCount();
+        }
+        else
+        {
+            printf("Round start timeout. Starting anyway.\r\n");
+            roundStartTime = getMsCount();
+        }
+    }
 }
 
 //----------------------------------------------------------
 // Elect the node's role for the current round.
-// If random value < CH_PROBABILITY, become a cluster head (and play a tune via AT+IDENT);
-// otherwise, remain in joining mode.
 static void electRole(void)
 {
     float r = getRandomFloat();
-    if (r < CH_PROBABILITY)
+    // if (r < CH_PROBABILITY)
+    if (r < 0)
     {
         nodeRole = ROLE_CLUSTER_HEAD;
         printf("Node %s elected as Cluster Head.\r\n", nodeID);
@@ -227,10 +241,10 @@ static void electRole(void)
         sprintf(msg, "CH_AD,%s", nodeID);
         rdatabBroadcastMessage(msg);
         // Play a tune on a newly elected CH.
-        // uint8_t identResp[50];
-        // char identCmd[64];
-        // sprintf(identCmd, "AT+IDENT:%s\r", nodeID);
-        // sendCommandAndReadResponse((uint8_t *)identCmd, "AT+IDENT", identResp, sizeof(identResp));
+        uint8_t identResp[50];
+        char identCmd[64];
+        sprintf(identCmd, "AT+IDENT:%s\r", nodeID);
+        sendCommandAndReadResponse((uint8_t *)identCmd, "AT+IDENT", identResp, sizeof(identResp));
     }
     else
     {
@@ -242,9 +256,6 @@ static void electRole(void)
 
 //----------------------------------------------------------
 // For a joining node, continuously listen for a RAW message containing "CH_AD"
-// until either a valid CH advertisement is received or the round expires.
-// If a valid CH advertisement is received, send a join request;
-// otherwise, time out and allow a retry in the next round.
 static void joinCluster(void)
 {
     char rawBuffer[128] = {0};
@@ -272,8 +283,6 @@ static void joinCluster(void)
 
 //----------------------------------------------------------
 // For a cluster head, continuously listen for incoming RAW messages
-// containing "JOIN" or "DATA". For JOIN messages, send an ACK_JOIN.
-// For DATA messages, print the sender ID and sensor value.
 static void chListenAndAcknowledge(void)
 {
     char rawBuffer[128] = {0};
@@ -328,23 +337,23 @@ static void chListenAndAcknowledge(void)
 
 //----------------------------------------------------------
 // Run the steady-state phase using tracker variables (non-blocking).
-// - For members: send sensor data periodically and continuously listen for "ROUND_COMPLETE".
-// - For cluster heads: send periodic CH advertisements, listen for JOIN/DATA,
-//   and use their internal timer to determine round end.
 static void runSteadyState(void)
 {
     uint32_t lastDataSend = getMsCount();
     uint32_t lastCHAd = getMsCount();
     uint32_t steadyStart = getMsCount();
-    char syncBuffer[50] = {0};
+    char syncBuffer[128] = {0}; // Increased buffer size
 
     while (true)
     {
         uint32_t now = getMsCount();
+        uint32_t elapsed = now - steadyStart;
+
         if (nodeRole == ROLE_MEMBER)
         {
-            // Send sensor data every MEMBER_DATA_INTERVAL.
-            if (now - lastDataSend >= MEMBER_DATA_INTERVAL)
+            // Send sensor data with safety margin
+            if ((now - lastDataSend >= MEMBER_DATA_INTERVAL) &&
+                (elapsed <= (ROUND_DURATION_MS - (2 * MEMBER_DATA_INTERVAL))))
             {
                 int reading = 20 * (getRandomFloat() + 1);
                 char dataMsg[50];
@@ -354,16 +363,22 @@ static void runSteadyState(void)
                 blinkMember();
                 lastDataSend = now;
             }
-            // Continuously check for ROUND_COMPLETE.
-            if (waitForMessage("ROUND_COMPLETE", 100, syncBuffer, sizeof(syncBuffer)))
+
+            // Check for ROUND_COMPLETE with minimal delay
+            size_t bytes = readAllBytesWithTimeout((uint8_t *)syncBuffer, sizeof(syncBuffer) - 1);
+            if (bytes > 0)
             {
-                printf("Member %s received ROUND_COMPLETE. Ending steady state.\r\n", nodeID);
-                break;
+                syncBuffer[bytes] = '\0';
+                if (strstr(syncBuffer, "ROUND_COMPLETE"))
+                {
+                    printf("Member %s received ROUND_COMPLETE. Ending steady state.\r\n", nodeID);
+                    break;
+                }
             }
         }
         else if (nodeRole == ROLE_CLUSTER_HEAD)
         {
-            // Send CH advertisement every CH_AD_INTERVAL.
+            // Send CH advertisement every CH_AD_INTERVAL
             if (now - lastCHAd >= CH_AD_INTERVAL)
             {
                 char adMsg[50];
@@ -371,21 +386,27 @@ static void runSteadyState(void)
                 rdatabBroadcastMessage(adMsg);
                 lastCHAd = now;
             }
-            // Continuously listen for JOIN/DATA messages.
+
+            // Listen for JOIN/DATA messages
             chListenAndAcknowledge();
-            // End steady state when the CH's round duration expires.
-            if (now - steadyStart >= (ROUND_DURATION_MS - ROUND_MARGIN))
+
+            // End steady state when the CH's round duration expires
+            if (elapsed >= (ROUND_DURATION_MS - ROUND_MARGIN))
             {
+                // Send final CH advertisement
+                char adMsg[50];
+                sprintf(adMsg, "CH_AD,%s", nodeID);
+                rdatabBroadcastMessage(adMsg);
                 break;
             }
         }
-        delayMs(10); // Yield briefly.
+
+        delayMs(10); // Yield briefly
     }
 }
 
 //----------------------------------------------------------
 // Only the cluster head controls round completion.
-// When its steady-state timer expires, the CH broadcasts "ROUND_COMPLETE".
 static void roundComplete(void)
 {
     rdatabBroadcastMessage("ROUND_COMPLETE");
@@ -395,9 +416,6 @@ static void roundComplete(void)
 
 //----------------------------------------------------------
 // Run one complete LEACH round.
-// The CH controls round termination by broadcasting ROUND_COMPLETE when its timer expires.
-// Members run their steady-state phase and exit when they receive ROUND_COMPLETE,
-// or time out and retry the election process in the next round.
 static void runRound(void)
 {
     processRoundStart();
@@ -431,8 +449,6 @@ static void runRound(void)
 
 //----------------------------------------------------------
 // Public initialization function for LEACH.
-// Resets the module, sets the channel, joins the PAN, and queries the device ID.
-// Also initializes the random number generator.
 void leach_init(void)
 {
     systemInitialize();
@@ -463,7 +479,6 @@ void leach_init(void)
 
 //----------------------------------------------------------
 // Main loop for LEACH operation.
-// Should be called repeatedly in the main loop.
 void leach_main_loop(void)
 {
     runRound();
