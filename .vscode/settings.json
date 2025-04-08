@@ -9,7 +9,8 @@
         "click_interface.h": "c",
         "plib_sercom4_usart.h": "c",
         "stdio.h": "c",
-        "utils.h": "c"
+        "utils.h": "c",
+        "usb_uart_example.h": "c"
     },
     "files.exclude": {
         "**/.git": true,

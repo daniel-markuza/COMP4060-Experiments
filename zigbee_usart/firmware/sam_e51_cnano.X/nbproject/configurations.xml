@@ -177,6 +177,7 @@
       <itemPath>../src/utils.h</itemPath>
       <itemPath>../src/worker.h</itemPath>
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.h</itemPath>
+      <itemPath>../src/sync_experiment.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -283,6 +284,7 @@
       <itemPath>../src/utils.c</itemPath>
       <itemPath>../src/worker.c</itemPath>
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.c</itemPath>
+      <itemPath>../src/sync_experiment.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
