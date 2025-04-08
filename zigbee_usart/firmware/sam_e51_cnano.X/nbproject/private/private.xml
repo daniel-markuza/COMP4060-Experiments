@@ -6,8 +6,8 @@
             <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/utils.c</file>
             <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/main_sam_e51_cnano.c</file>
             <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/utils.h</file>
-            <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/leach.h</file>
             <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/coordinator.c</file>
+            <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/leach.h</file>
             <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/click_routines/usb_uart/usb_uart_example.c</file>
             <file>file:/Users/paradox/Documents/GitHub/COMP4060-Experiment1/zigbee_usart/firmware/src/leach.c</file>
         </group>
