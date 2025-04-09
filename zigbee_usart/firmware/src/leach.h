@@ -29,6 +29,6 @@ typedef enum
 
 // Public functions
 void leach_init(void);
-void leach_main_loop(void);
+void leach_main(void);
 
 #endif /* LEACH_H */

@@ -176,9 +176,6 @@
       </logicalFolder>
       <itemPath>../src/utils.h</itemPath>
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.h</itemPath>
-      <itemPath>../src/worker_1.h</itemPath>
-      <itemPath>../src/worker_2.h</itemPath>
-      <itemPath>../src/worker_3.h</itemPath>
       <itemPath>../src/leach.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
@@ -285,10 +282,7 @@
       <itemPath>../src/config/sam_e51_cnano/pin_configurations.csv</itemPath>
       <itemPath>../src/utils.c</itemPath>
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.c</itemPath>
-      <itemPath>../src/worker_1.c</itemPath>
-      <itemPath>../src/worker_2.c</itemPath>
-      <itemPath>../src/worker_3.c</itemPath>
-      <itemPath>../src/leach.c</itemPath>
+      <itemPath>../src/leach copy.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
@@ -1123,6 +1117,8 @@
         <property key="memories.programmemory" value="true"/>
         <property key="memories.programmemory.ranges" value="0-fffff"/>
         <property key="poweroptions.powerenable" value="false"/>
+        <property key="programmerToGoFilePath"
+                  value="D:/MassMarket/github_repos/reference_apps/apps/sam_e51_cnano/same51n_mikroe_click/usb_uart/firmware/sam_e51_cnano.X/debug/sam_e51_cnano/sam_e51_cnano_ptg"/>
         <property key="programoptions.eraseb4program" value="true"/>
         <property key="programoptions.preservedataflash" value="false"/>
         <property key="programoptions.preservedataflash.ranges"
