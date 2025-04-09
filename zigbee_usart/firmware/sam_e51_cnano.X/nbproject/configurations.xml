@@ -175,6 +175,7 @@
         </logicalFolder>
       </logicalFolder>
       <itemPath>../src/utils.h</itemPath>
+      <itemPath>../src/worker.h</itemPath>
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.h</itemPath>
       <itemPath>../src/leach.h</itemPath>
     </logicalFolder>
@@ -200,8 +201,6 @@
       <logicalFolder name="f1" displayName="click_routines" projectFiles="true">
         <logicalFolder name="f1" displayName="usb_uart" projectFiles="true">
           <itemPath>../src/click_routines/usb_uart/usb_uart.c</itemPath>
-          <itemPath>../src/coordinator.h</itemPath>
-          <itemPath>../src/coordinator.c</itemPath>
         </logicalFolder>
       </logicalFolder>
       <logicalFolder name="f2" displayName="config" projectFiles="true">
@@ -282,7 +281,7 @@
       <itemPath>../src/config/sam_e51_cnano/pin_configurations.csv</itemPath>
       <itemPath>../src/utils.c</itemPath>
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.c</itemPath>
-      <itemPath>../src/leach copy.c</itemPath>
+      <itemPath>../src/leach.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
@@ -303,8 +302,8 @@
         <platform>4</platform>
       </toolsSet>
       <packs>
-        <pack name="SAME51_DFP" vendor="Microchip" version="3.6.130"/>
         <pack name="CMSIS" vendor="ARM" version="5.4.0"/>
+        <pack name="SAME51_DFP" vendor="Microchip" version="3.6.130"/>
       </packs>
       <ScriptingSettings>
       </ScriptingSettings>
@@ -1117,8 +1116,6 @@
         <property key="memories.programmemory" value="true"/>
         <property key="memories.programmemory.ranges" value="0-fffff"/>
         <property key="poweroptions.powerenable" value="false"/>
-        <property key="programmerToGoFilePath"
-                  value="D:/MassMarket/github_repos/reference_apps/apps/sam_e51_cnano/same51n_mikroe_click/usb_uart/firmware/sam_e51_cnano.X/debug/sam_e51_cnano/sam_e51_cnano_ptg"/>
         <property key="programoptions.eraseb4program" value="true"/>
         <property key="programoptions.preservedataflash" value="false"/>
         <property key="programoptions.preservedataflash.ranges"

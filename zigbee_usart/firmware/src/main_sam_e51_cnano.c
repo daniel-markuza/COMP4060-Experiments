@@ -63,11 +63,10 @@ int main(void)
   /* Initialize all modules */
   SYS_Initialize(NULL);
 
-//    leach_init();
-
+    leach_main();
+//usb_uart_example();
   while (true)
   {
-          leach_main();
   }
 
   /* Execution should not come here during normal operation */

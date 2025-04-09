@@ -4,14 +4,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef enum
-{
-    ROLE_IDLE,
-    ROLE_JOINING,
-    ROLE_MEMBER,
-    ROLE_CLUSTER_HEAD
-} LEACH_Role;
-
 // Configuration parameters
 #define ROUND_DURATION_MS 30000UL     // Each round lasts 30 seconds
 #define ROUND_START_TIMEOUT_MS 5000UL // Backup: 5 seconds waiting for "ROUND_START"
@@ -28,7 +20,6 @@ typedef enum
 #define AT_RDATAB_PREFIX "AT+RDATAB:"
 
 // Public functions
-void leach_init(void);
 void leach_main(void);
 
 #endif /* LEACH_H */
