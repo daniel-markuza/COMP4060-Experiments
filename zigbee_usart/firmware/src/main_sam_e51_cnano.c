@@ -63,7 +63,7 @@ int main(void)
   /* Initialize all modules */
   SYS_Initialize(NULL);
 
-    leach_init();
+//    leach_init();
 
   while (true)
   {
