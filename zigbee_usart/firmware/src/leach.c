@@ -9,15 +9,13 @@
 // ---------------------------------------------------------------------------
 // Configuration Constants (modify these per node if required)
 // ---------------------------------------------------------------------------
-#define NODE_DELAY_MS 3000UL      // How long a member node waits before sending data (in ms)
-#define ROUND_DURATION_MS 17000UL // Total duration of one LEACH round (in ms)
+#define NODE_DELAY_MS 3000UL      // How long a member waits between sending data (ms)
+#define ROUND_DURATION_MS 20000UL // Total duration of one LEACH round (ms)
 #define CH_PROBABILITY 25         // Percent chance (0-100) to become Cluster Head in a round
-#define CH_AD_INTERVAL_MS 2000UL  // Interval between CH advertisements (in ms)
+#define CH_AD_INTERVAL_MS 2000UL  // Interval between CH advertisements (ms)
 #define MAX_JOIN_MESSAGES 10      // Maximum number of join requests (and DATA messages) to store
 #define MAX_MSG_LEN 50            // Maximum length for any message
-
-// Adjust the minimum interval between consecutive CH roles so that a node is not prevented from becoming CH too long
-#define MIN_CH_INTERVAL_MS 8000UL // Minimum time (in ms) between CH roles for a node
+#define MIN_CH_INTERVAL_MS 8000UL // Minimum time (ms) between consecutive CH roles for a node
 
 // ---------------------------------------------------------------------------
 // Message Delimiters
@@ -28,6 +26,17 @@
 // ---------------------------------------------------------------------------
 // Data Structures and Global Variables
 // ---------------------------------------------------------------------------
+
+// Updated MemberData structure: now accumulates sensor data from a member.
+typedef struct
+{
+    char nodeID[16];
+    int sensorTotal;     // Sum of all sensor readings received
+    uint8_t sensorCount; // Number of DATA messages received
+} MemberData;
+static MemberData memberData[MAX_JOIN_MESSAGES];
+static uint8_t memberCount = 0;
+
 typedef enum
 {
     ROLE_IDLE,
@@ -36,34 +45,39 @@ typedef enum
     ROLE_MEMBER
 } LEACH_Role;
 static LEACH_Role nodeRole = ROLE_IDLE;
-static uint32_t roundStartTime = 0; // Absolute time at which the current round starts
+static uint32_t roundStartTime = 0; // Absolute time when the current round starts
 
-// For aggregation: store member sensor data (from DATA messages)
-typedef struct
-{
-    char nodeID[16];
-    int sensorValue;
-} MemberData;
-static MemberData memberData[MAX_JOIN_MESSAGES];
-static uint8_t memberCount = 0;
-
-// For simple role election, record last time this node was CH to avoid back-to-back CH roles
+// For role election, record last time this node was CH.
 static uint32_t lastCHTime = 0;
 
-// For UART message processing:
+// UART message processing.
 static char msgBuffer[MAX_MSG_LEN];
 static uint8_t msgIndex = 0;
-static uint8_t inMessage = 0; // Flag indicating a message is being received
+static uint8_t inMessage = 0; // Flag indicating that a message is being received.
 
-// Global flag for round completion (set when a ROUND_COMPLETE message is received)
+// Global flag for round completion (set by receiving a ROUND_COMPLETE message).
 static volatile uint8_t roundEnded = 0;
 
-// Hardcoded Node ID (ensure each node has a unique identifier)
-static const char *NODE_ID = "NODE_A"; // Change for each node (NODE_A, NODE_B, NODE_C, etc.)
+// Global variable to track the last time a member node sent a DATA message.
+static uint32_t lastMemberSend = 0;
+
+// Hardcoded Node ID (ensure each node has a unique identifier).
+static const char *NODE_ID = "NODE_B"; // Change for each node (NODE_A, NODE_B, NODE_C, etc.)
 
 // ---------------------------------------------------------------------------
 // Utility Functions
 // ---------------------------------------------------------------------------
+
+static void initRandomSeed(void)
+{
+    uint32_t seed = getMsCount(); // Get current uptime in ms (relatively unique between boots)
+    for (size_t i = 0; i < strlen(NODE_ID); i++)
+    {
+        seed ^= ((uint32_t)NODE_ID[i]) << (i % 24); // Mix in NODE_ID characters
+    }
+    srand(seed);
+    printf("Initialized random seed: %lu\r\n", seed);
+}
 
 static float getRandomFloat(void)
 {
@@ -79,15 +93,19 @@ static float getRandomFloat(void)
 static void broadcast(const char *type, const char *content)
 {
     char msg[MAX_MSG_LEN];
-    // Create a message formatted as: ">TYPE,CONTENT<"
     snprintf(msg, sizeof(msg), "%c%s,%s%c", MSG_START, type, content, MSG_END);
     uint8_t len = (uint8_t)strlen(msg);
 
     char cmd[30];
     sprintf(cmd, "AT+RDATAB:%02X\r", len);
     usb_uart_USART_Write((uint8_t *)cmd, strlen(cmd));
-    delayMs(20);
+    while (usb_uart_USART_WriteIsBusy())
+    {
+    }
     usb_uart_USART_Write((uint8_t *)msg, len);
+    while (usb_uart_USART_WriteIsBusy())
+    {
+    }
     printf("Broadcasted: %s\r\n", msg);
 }
 
@@ -96,12 +114,10 @@ static void broadcast(const char *type, const char *content)
  *
  * Expected message format: "TYPE,DATA"
  *
- * The sscanf call below:
+ * The sscanf call:
  *    if (sscanf(msg, "%15[^,],%31[^<]", type, content) != 2)
- * means: read up to 15 characters until a comma into 'type', and then
- * read up to 31 characters until a '<' into 'content'. If 2 tokens are not
- * successfully extracted (i.e. the format is not exactly “TYPE,DATA”), then
- * the message is rejected.
+ * reads up to 15 characters into 'type' until a comma is encountered and then up to 31 characters into 'content' until a '<' character.
+ * If both tokens are not extracted, the message is ignored.
  */
 static void handleMessage(const char *msg)
 {
@@ -113,25 +129,27 @@ static void handleMessage(const char *msg)
     if (strcmp(type, "CH_AD") == 0 && nodeRole == ROLE_JOINING)
     {
         printf("Received CH advertisement from %s\r\n", content);
-        // Join the cluster by broadcasting JOIN request
+        // Immediately join by broadcasting a JOIN request.
         broadcast("JOIN", NODE_ID);
         nodeRole = ROLE_MEMBER;
     }
     else if (strcmp(type, "JOIN") == 0 && nodeRole == ROLE_CLUSTER_HEAD)
     {
-        // CH records the joining node's ID for aggregation.
+        // For each JOIN request, record the joining node's ID for later aggregation.
         if (memberCount < MAX_JOIN_MESSAGES)
         {
             strncpy(memberData[memberCount].nodeID, content, sizeof(memberData[memberCount].nodeID) - 1);
             memberData[memberCount].nodeID[sizeof(memberData[memberCount].nodeID) - 1] = '\0';
-            memberData[memberCount].sensorValue = 0;
+            // Initialize aggregation values.
+            memberData[memberCount].sensorTotal = 0;
+            memberData[memberCount].sensorCount = 0;
             memberCount++;
-            printf("CH recorded join request from %s\r\n", content);
+            printf("CH recorded JOIN request from %s\r\n", content);
         }
     }
     else if (strcmp(type, "DATA") == 0 && nodeRole == ROLE_CLUSTER_HEAD)
     {
-        // Expect data in the format "NODE_ID,sensorValue"
+        // DATA message expected format: "NODE_ID,sensorValue"
         char sender[16] = {0};
         int sensorVal = 0;
         if (sscanf(content, "%15[^,],%d", sender, &sensorVal) == 2)
@@ -141,7 +159,9 @@ static void handleMessage(const char *msg)
             {
                 if (strcmp(memberData[i].nodeID, sender) == 0)
                 {
-                    memberData[i].sensorValue = sensorVal;
+                    // Accumulate the sensor value and increment count for averaging later.
+                    memberData[i].sensorTotal += sensorVal;
+                    memberData[i].sensorCount++;
                     found = 1;
                     break;
                 }
@@ -150,7 +170,8 @@ static void handleMessage(const char *msg)
             {
                 strncpy(memberData[memberCount].nodeID, sender, sizeof(memberData[memberCount].nodeID) - 1);
                 memberData[memberCount].nodeID[sizeof(memberData[memberCount].nodeID) - 1] = '\0';
-                memberData[memberCount].sensorValue = sensorVal;
+                memberData[memberCount].sensorTotal = sensorVal;
+                memberData[memberCount].sensorCount = 1;
                 memberCount++;
             }
             printf("CH received DATA from %s: %d\r\n", sender, sensorVal);
@@ -190,7 +211,7 @@ static void processInput(void)
                 if (byte == MSG_END)
                 {
                     msgBuffer[msgIndex] = '\0';
-                    // Process message without delimiters (pass msgBuffer+1)
+                    // Process message without the start and end delimiters.
                     handleMessage(msgBuffer + 1);
                     inMessage = 0;
                     msgIndex = 0;
@@ -206,8 +227,8 @@ static void processInput(void)
 /**
  * @brief Elects the node's role for the current round.
  *
- * Uses a random number (0.0 to 1.0) to decide whether the node becomes CH,
- * provided it hasn't been CH too recently.
+ * The node becomes a Cluster Head (CH) with probability CH_PROBABILITY (in percent)
+ * if it hasn't been CH too recently; otherwise, it becomes a joining node.
  */
 static void electRole(void)
 {
@@ -218,12 +239,13 @@ static void electRole(void)
         nodeRole = ROLE_JOINING;
         return;
     }
-    float rnd = getRandomFloat(); // Returns a float between 0 and 1
+    // float rnd = getRandomFloat();
+    float rnd = 0.1;
+    rnd = 0.8;
     if ((rnd * 100) < CH_PROBABILITY)
     {
         nodeRole = ROLE_CLUSTER_HEAD;
         lastCHTime = now;
-        // Broadcast CH advertisement
         broadcast("CH_AD", NODE_ID);
         printf("Node %s elected as Cluster Head.\r\n", NODE_ID);
     }
@@ -235,74 +257,76 @@ static void electRole(void)
 }
 
 /**
- * @brief For joining nodes, wait for a CH advertisement for an entire round.
- * Once a CH advertisement is received, send a JOIN request.
+ * @brief For joining nodes: wait for a CH advertisement for the entire round and then send a JOIN request.
  */
 static void joinCluster(void)
 {
     uint32_t start = getMsCount();
-    // Wait for the entire round duration to hear a CH advertisement
     while (getMsCount() - start < ROUND_DURATION_MS && !roundEnded)
     {
         processInput();
-        if (nodeRole == ROLE_MEMBER)
-        {
-            return; // Already joined
-        }
+        if (nodeRole == ROLE_MEMBER) // Already joined
+            return;
     }
-    // If no CH advertisement received this round:
     printf("Node %s did not receive any CH advertisement this round.\r\n", NODE_ID);
 }
 
 /**
- * @brief For member nodes: wait for NODE_DELAY_MS then send sensor data to the CH.
+ * @brief For member nodes: repeatedly send sensor data during the round.
+ *
+ * Members check if NODE_DELAY_MS has elapsed since their last DATA transmission and, if so, send a new DATA message.
  */
 static void sendMemberData(void)
 {
     uint32_t now = getMsCount();
-    // Wait for the configured member delay within the round.
-    while (getMsCount() - now < NODE_DELAY_MS)
+    // Check if it's time to send another DATA message.
+    if (now - lastMemberSend >= NODE_DELAY_MS)
     {
-        processInput();
-        if (roundEnded)
-        {
-            return; // End round early if a ROUND_COMPLETE message is received.
-        }
+        int sensorValue = (int)(getRandomFloat() * 100); // Simulate sensor reading
+        char dataContent[32];
+        snprintf(dataContent, sizeof(dataContent), "%s,%d", NODE_ID, sensorValue);
+        broadcast("DATA", dataContent);
+        printf("Member %s sent sensor data: %d\r\n", NODE_ID, sensorValue);
+        lastMemberSend = now;
     }
-    // Simulate sensor reading (replace with real sensor code if available)
-    int sensorValue = (int)(getRandomFloat() * 100);
-    char dataContent[32];
-    snprintf(dataContent, sizeof(dataContent), "%s,%d", NODE_ID, sensorValue);
-    broadcast("DATA", dataContent);
-    printf("Member %s sent sensor data: %d\r\n", NODE_ID, sensorValue);
 }
 
 /**
- * @brief For CH nodes: aggregate sensor data received near the end of the round.
+ * @brief For CH nodes: aggregate sensor data from members.
+ *
+ * This function waits until near the end of the round (or until a ROUND_COMPLETE message is received)
+ * then prints out the average sensor value for each member (computed as sensorTotal / sensorCount).
  */
 static void aggregateData(void)
 {
-    // Wait until near the end of the round or until a ROUND_COMPLETE message is received.
     while (getMsCount() - roundStartTime < (ROUND_DURATION_MS - 1000UL) && !roundEnded)
     {
         processInput();
     }
-    // Print aggregated member sensor data.
     printf("\n--- Aggregated Data from Cluster Members ---\r\n");
     for (uint8_t i = 0; i < memberCount; i++)
     {
-        printf("Node %s: Sensor Value = %d\r\n", memberData[i].nodeID, memberData[i].sensorValue);
+        if (memberData[i].sensorCount > 0)
+        {
+            int avg = memberData[i].sensorTotal / memberData[i].sensorCount;
+            printf("Node %s: Avg Sensor Value = %d (Total = %d, Count = %d)\r\n",
+                   memberData[i].nodeID, avg, memberData[i].sensorTotal, memberData[i].sensorCount);
+        }
+        else
+        {
+            printf("Node %s: No data received.\r\n", memberData[i].nodeID);
+        }
     }
     printf("----------------------------------------------\r\n");
 }
 
 /**
- * @brief For CH nodes: broadcast a ROUND_COMPLETE message to end the round.
+ * @brief For CH nodes: broadcast a ROUND_COMPLETE message to signal round end.
  */
 static void sendRoundComplete(void)
 {
     broadcast("ROUND_COMPLETE", NODE_ID);
-    roundEnded = 1; // Signal locally that round is complete.
+    roundEnded = 1;
     printf("CH %s broadcasted ROUND_COMPLETE.\r\n", NODE_ID);
 }
 
@@ -310,49 +334,56 @@ static void sendRoundComplete(void)
  * @brief Runs one complete LEACH round.
  *
  * - Elect role (CH or JOINING).
- * - If JOINING, wait for CH advertisement for entire round and then send JOIN request.
- * - Steady-state: CH nodes broadcast periodic CH_AD and aggregate sensor DATA; member nodes wait for their TDMA slot and then send DATA.
- * - At the end of the round, CH nodes broadcast a ROUND_COMPLETE message; members listen for it.
- * - Reset state and wait for the next round.
+ * - If JOINING, wait for a CH advertisement for the entire round and then send a JOIN request.
+ * - Steady-state phase:
+ *      - CH nodes broadcast periodic CH_AD messages and accept multiple DATA messages from members.
+ *      - Member nodes send DATA repeatedly whenever NODE_DELAY_MS elapses.
+ * - At the end of the round, CH nodes broadcast a ROUND_COMPLETE message which causes members to finish early.
+ * - Reset state for the next round.
  */
 static void runRound(void)
 {
     roundEnded = 0;
     roundStartTime = getMsCount();
     memberCount = 0;
+    lastMemberSend = roundStartTime;
 
     electRole();
 
     if (nodeRole == ROLE_JOINING)
     {
         joinCluster();
+        // if (nodeRole == ROLE_JOINING)
+        // {
+        //     return;
+        // }
     }
 
     uint32_t roundStart = getMsCount();
-    // Steady-state phase: run for the duration of the round.
+    // Steady-state phase: run for the entire round duration (or until a ROUND_COMPLETE message is received).
     while (getMsCount() - roundStart < ROUND_DURATION_MS && !roundEnded)
     {
         processInput();
-        // For CH nodes, send CH advertisements more frequently.
+        // For CH nodes: periodically send CH advertisements.
         if (nodeRole == ROLE_CLUSTER_HEAD && ((getMsCount() - roundStart) % CH_AD_INTERVAL_MS) < 50)
         {
             broadcast("CH_AD", NODE_ID);
         }
-        // For member nodes that have already joined, send sensor data after waiting for NODE_DELAY_MS.
+        // For member nodes: repeatedly send DATA messages.
         if (nodeRole == ROLE_MEMBER)
         {
             sendMemberData();
         }
     }
 
-    // For CH nodes: at the end of the round, broadcast ROUND_COMPLETE and aggregate any remaining data.
+    // For CH nodes: at the end of the round, broadcast a ROUND_COMPLETE message and aggregate any remaining data.
     if (nodeRole == ROLE_CLUSTER_HEAD)
     {
-        aggregateData();
         sendRoundComplete();
+        aggregateData();
     }
 
-    // End of round processing: reset role and state.
+    // End-of-round processing: reset state.
     nodeRole = ROLE_IDLE;
     roundEnded = 0;
     printf("Round complete.\r\n\n");
@@ -365,6 +396,7 @@ static void runRound(void)
 int leach_main(void)
 {
     systemInitialize();
+    initRandomSeed(); // Initialize RNG seed
 
     roundStartTime = getMsCount();
 
