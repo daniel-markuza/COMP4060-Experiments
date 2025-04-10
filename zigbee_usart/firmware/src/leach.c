@@ -19,7 +19,7 @@
 #define MSG_END '<'               // Message end delimiter
 
 // Unique Node ID (change per node)
-static const char *NODE_ID = "NODE_A";
+static const char *NODE_ID = "NODE_C";
 
 // ---------------------------------------------------------------------------
 // Data Structures
@@ -48,6 +48,7 @@ static MemberData memberData[MAX_MEMBERS];
 static uint8_t memberCount = 0;
 static volatile uint8_t roundEnded = 0;
 static uint32_t lastMemberSend = 0;
+static uint32_t lastCHAdTime = 0;
 
 // Message buffer (reduced from static to local in functions where possible)
 static char msgBuffer[MAX_MSG_LEN];
@@ -128,14 +129,29 @@ static void processInput(void)
                 char type[10], content[20];
                 if (sscanf(msgBuffer + 1, "%9[^,],%19[^<]", type, content) == 2)
                 {
-                    if (strcmp(type, "CH_AD") == 0 && nodeRole == ROLE_JOINING)
+                    if (strcmp(type, "CH_AD") == 0)
                     {
-                        broadcast("JOIN", NODE_ID);
-                        nodeRole = ROLE_MEMBER;
+                        if (nodeRole == ROLE_JOINING)
+                        {
+                            broadcast("JOIN", NODE_ID);
+                            nodeRole = ROLE_MEMBER;
+                        }
+                        lastCHAdTime = getMsCount();
                     }
                     else if (strcmp(type, "JOIN") == 0 && nodeRole == ROLE_CLUSTER_HEAD)
                     {
-                        if (memberCount < MAX_MEMBERS)
+                        // First check if this node already exists in our member list
+                        int alreadyExists = 0;
+                        for (uint8_t i = 0; i < memberCount; i++)
+                        {
+                            if (strcmp(memberData[i].nodeID, content) == 0)
+                            {
+                                alreadyExists = 1;
+                                break;
+                            }
+                        }
+
+                        if (!alreadyExists && memberCount < MAX_MEMBERS)
                         {
                             strncpy(memberData[memberCount].nodeID, content, sizeof(memberData[0].nodeID) - 1);
                             memberData[memberCount].nodeID[sizeof(memberData[0].nodeID) - 1] = '\0';
@@ -144,8 +160,15 @@ static void processInput(void)
                             memberCount++;
                             printf("CH recorded JOIN request from %s\r\n", content);
                         }
+                        else if (alreadyExists)
+                        {
+                            printf("CH ignoring duplicate JOIN from %s\r\n", content);
+                        }
+                        else
+                        {
+                            printf("CH cannot accept JOIN from %s - member list full\r\n", content);
+                        }
                     }
-
                     else if (strcmp(type, "DATA") == 0 && nodeRole == ROLE_CLUSTER_HEAD)
                     {
                         char sender[10] = {0};
@@ -176,6 +199,17 @@ static void processInput(void)
     }
 }
 
+static void checkCHTimeout(void)
+{
+    if (nodeRole == ROLE_MEMBER &&
+        (getMsCount() - lastCHAdTime > CH_AD_INTERVAL_MS * 2)) // Allow 2x interval before declaring CH dead
+    {
+        printf("Node %s: No CH advertisement for %lu ms, assuming CH is down\r\n",
+               NODE_ID, getMsCount() - lastCHAdTime);
+        roundEnded = 1; // Trigger round end
+    }
+}
+
 // ---------------------------------------------------------------------------
 // LEACH Protocol Functions
 // ---------------------------------------------------------------------------
@@ -198,7 +232,7 @@ static void electRole(void)
 static void joinCluster(void)
 {
     uint32_t start = getMsCount();
-    while (getMsCount() - start < ROUND_DURATION_MS && !roundEnded)
+    while (getMsCount() - start < (CH_AD_INTERVAL_MS * 2) && !roundEnded)
     {
         processInput();
         if (nodeRole == ROLE_MEMBER)
@@ -239,7 +273,7 @@ static void aggregateData(void)
         }
         else
         {
-            printf("Node %s: No data received.\r\n", memberData[i].nodeID);
+            printf("%s: No data received.\r\n", memberData[i].nodeID);
         }
     }
     printf("----------------------------------------------\r\n");
@@ -252,6 +286,7 @@ static void runRound(void)
     roundStartTime = getMsCount();
     memberCount = 0;
     lastMemberSend = roundStartTime;
+    lastCHAdTime = roundStartTime;
 
     electRole();
 
@@ -270,15 +305,16 @@ static void runRound(void)
     {
         processInput();
 
+        if (nodeRole == ROLE_MEMBER)
+        {
+            checkCHTimeout();
+            sendMemberData();
+        }
+
         if (nodeRole == ROLE_CLUSTER_HEAD && (getMsCount() - lastAdvert >= CH_AD_INTERVAL_MS))
         {
             broadcast("CH_AD", NODE_ID);
             lastAdvert = getMsCount();
-        }
-
-        if (nodeRole == ROLE_MEMBER)
-        {
-            sendMemberData();
         }
     }
 
