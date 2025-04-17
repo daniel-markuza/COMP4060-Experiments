@@ -178,6 +178,7 @@
       <itemPath>../src/worker.h</itemPath>
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.h</itemPath>
       <itemPath>../src/leach.h</itemPath>
+      <itemPath>../src/assignment.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -282,6 +283,7 @@
       <itemPath>../src/utils.c</itemPath>
       <itemPath>../src/click_routines/usb_uart/usb_uart_example.c</itemPath>
       <itemPath>../src/leach.c</itemPath>
+      <itemPath>../src/assignment.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
