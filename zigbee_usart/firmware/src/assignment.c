@@ -9,17 +9,19 @@
 // ---------------------------------------------------------------------------
 // Configurations
 // ---------------------------------------------------------------------------
-#define NODE_DELAY_MS 3000UL
-#define ROUND_DURATION_MS 20000UL // head’s steady‐state window
-#define CH_PROBABILITY 25
-#define CH_AD_INTERVAL_MS 2000UL
-#define CH_AD_TIMEOUT_MS (2 * CH_AD_INTERVAL_MS)
-#define JOIN_WINDOW_MS 10000UL
-#define STEADY_START_DELAY_MS 2000UL
+#define NODE_DELAY_MS 3000UL      // base slot length
+#define ROUND_DURATION_MS 60000UL // steady‐state window
+#define CH_PROBABILITY 25         // % chance to be CH
+#define CH_AD_INTERVAL_MS 2000UL  // CH_AD broadcast interval
+#define JOIN_WINDOW_MS 8000UL     // time to collect JOINs
+#define CH_AD_TIMEOUT_MS (ROUND_DURATION_MS / 2)
 
 #define MAX_MEMBERS 10
 #define MAX_MSG_LEN 80
 #define MAX_SENDS_PER_ROUND 2
+
+// *** Set your static slot here (1-based) ***
+#define STATIC_SLOT 2
 
 static const char CMD_SLEEP_MODE[] = "ATS39=3\r";
 static const char CMD_WAKE_MODE[] = "ATS39=0\r";
@@ -27,13 +29,11 @@ static const char CMD_WAKE_MODE[] = "ATS39=0\r";
 #define MSG_START '>'
 #define MSG_END '<'
 
-// Node states
 typedef enum
 {
     ROLE_IDLE,
     ROLE_CLUSTER_HEAD,
     ROLE_JOINING,
-    ROLE_WAITING_STEADY_START,
     ROLE_MEMBER
 } Role;
 
@@ -43,17 +43,13 @@ typedef enum
 static Role nodeRole = ROLE_IDLE;
 static char NODE_ID[17] = {0};
 static char headID[17] = {0};
-static uint8_t mySlot = 0;
 static uint8_t memberCount = 0;
 static char memberList[MAX_MEMBERS][17];
-static uint32_t lastCH = 0;
-static uint32_t lastCHAD = 0;
-static uint32_t steadyStart = 0;
+static uint32_t lastCHAD = 0;    // last CH_AD seen
+static uint32_t steadyStart = 0; // start of steady‐state
 static uint8_t sendsThisRound = 0;
-static uint8_t steadyStateStarted = 0;
-static uint8_t nextSlot = 1; // for dynamic assignment
 
-// UART RX buffer
+// UART framing
 static char msgBuf[MAX_MSG_LEN];
 static uint8_t msgIdx = 0;
 static uint8_t inMessage = 0;
@@ -80,7 +76,7 @@ static int isHexString(const char *s, size_t n)
 }
 
 //------------------------------------------------------------------------------
-// Fetch our EUI64 by sending "ATI" over UART & parsing the 16‐hex reply
+// Fetch NODE_ID via “ATI”
 //------------------------------------------------------------------------------
 static void fetchNodeID(void)
 {
@@ -97,7 +93,7 @@ static void fetchNodeID(void)
                 if (idx == 16 && isHexString(line, 16))
                 {
                     memcpy(NODE_ID, line, 16);
-                    NODE_ID[16] = 0;
+                    NODE_ID[16] = '\0';
                     printf("[%s] NODE_ID fetched\r\n", NODE_ID);
                     return;
                 }
@@ -111,15 +107,13 @@ static void fetchNodeID(void)
     }
 }
 
-//------------------------------------------------------------------------------
-// Sleep / wake commands
-//------------------------------------------------------------------------------
 static void enterSleep(void)
 {
     usb_uart_USART_Write((uint8_t *)CMD_SLEEP_MODE, strlen(CMD_SLEEP_MODE));
     while (usb_uart_USART_WriteIsBusy())
         ;
 }
+
 static void exitSleep(void)
 {
     usb_uart_USART_Write((uint8_t *)CMD_WAKE_MODE, strlen(CMD_WAKE_MODE));
@@ -128,7 +122,7 @@ static void exitSleep(void)
 }
 
 //------------------------------------------------------------------------------
-// Broadcast (or unicast) a framed "type,SRC=...,DST=...,DATA=..." packet
+// Broadcast a framed packet
 //------------------------------------------------------------------------------
 static void broadcast(const char *type, const char *dst, const char *data)
 {
@@ -136,11 +130,8 @@ static void broadcast(const char *type, const char *dst, const char *data)
     int n = snprintf(pkt, sizeof(pkt),
                      "%c%s,SRC=%s,DST=%s,DATA=%s%c",
                      MSG_START, type, NODE_ID, dst, data, MSG_END);
-    // show what we're sending
-    printf("[%s] TX %-8s → %s : %s\r\n",
-           NODE_ID, type, dst, data);
+    printf("[%s] TX %-8s → %s : %s\r\n", NODE_ID, type, dst, data);
 
-    // AT+RDATAB:<len>
     char at[16];
     int m = snprintf(at, sizeof(at), "AT+RDATAB:%02X\r", (uint8_t)n);
     usb_uart_USART_Write((uint8_t *)at, m);
@@ -152,23 +143,21 @@ static void broadcast(const char *type, const char *dst, const char *data)
 }
 
 //------------------------------------------------------------------------------
-// Handle one complete incoming packet in msgBuf[0..msgIdx-1]
+// Handle one complete received packet in msgBuf
 //------------------------------------------------------------------------------
 static void handleMessage(void)
 {
-     printf("in handleMsg: %s\r\n", msgBuf+1);
     char *p = msgBuf + 1;
     char *end = strchr(p, MSG_END);
     if (end)
-        *end = 0;
+        *end = '\0';
 
-    char *type = strtok(p, ",");
+    char *type = strtok(p, ","), *src = NULL, *dst = NULL, *data = NULL;
     if (!type)
         return;
-
-    char *src = 0, *dst = 0, *data = 0;
-    for (char *tok = strtok(NULL, ","); tok; tok = strtok(NULL, ","))
+    for (char *tok = strtok(NULL, ","), *next; tok; tok = next)
     {
+        next = strtok(NULL, ",");
         if (!strncmp(tok, "SRC=", 4))
             src = tok + 4;
         else if (!strncmp(tok, "DST=", 4))
@@ -184,81 +173,84 @@ static void handleMessage(void)
     if (strcmp(dst, NODE_ID) && strcmp(dst, "ALL"))
         return;
 
-    // show what we got
-    printf("[%s] RX %-8s ← %s : %s\r\n",
-           NODE_ID, type, src, data);
+    printf("[%s] RX %-8s ← %s : %s\r\n", NODE_ID, type, src, data);
     exitSleep();
 
-    // any CH_AD resets our CH‐timeout
+    // any CH_AD refresh
     if (!strcmp(type, "CH_AD"))
     {
         lastCHAD = getMsCount();
     }
 
-    // JOIN handling
-    if (!strcmp(type, "JOIN") && nodeRole == ROLE_CLUSTER_HEAD)
+    // MEMBER: on first CH_AD, join
+    if (!strcmp(type, "CH_AD") && nodeRole == ROLE_JOINING)
+    {
+        strncpy(headID, src, 16);
+        headID[16] = '\0';
+        printf("[%s] Found CH %s → sending JOIN\r\n", NODE_ID, headID);
+        broadcast("JOIN", headID, NODE_ID);
+        nodeRole = ROLE_MEMBER;
+        steadyStart = getMsCount();
+        printf("[%s] Using slot=%u\r\n", NODE_ID, STATIC_SLOT);
+    }
+    // CH: record JOINers (no slot assignment)
+    else if (!strcmp(type, "JOIN") && nodeRole == ROLE_CLUSTER_HEAD)
     {
         if (memberCount < MAX_MEMBERS)
         {
-            // record member
-            memcpy(memberList[memberCount], src, 17);
-            // assign a slot dynamically
-            char buf[4];
-            int slot = nextSlot++;
-            snprintf(buf, sizeof(buf), "%d", slot);
-            printf("[%s] ASSIGN slot %d to %s\r\n", NODE_ID, slot, src);
-            broadcast("ASSIGN", src, buf);
+            strncpy(memberList[memberCount], src, 16);
+            memberList[memberCount][16] = '\0';
             memberCount++;
+            printf("[%s] CH added member %s (#%u)\r\n",
+                   NODE_ID, src, memberCount);
         }
     }
-    // ASSIGN handling (member)
-    else if (!strcmp(type, "ASSIGN") &&
-             (nodeRole == ROLE_WAITING_STEADY_START || nodeRole == ROLE_MEMBER))
-    {
-        mySlot = atoi(data);
-        printf("[%s] Got ASSIGN → mySlot=%u\r\n", NODE_ID, mySlot);
-    }
-    // CH_AD during JOIN
-    else if (!strcmp(type, "CH_AD") && nodeRole == ROLE_JOINING)
-    {
-        memcpy(headID, src, 17);
-        printf("[%s] Found head %s → sending JOIN\r\n", NODE_ID, headID);
-        broadcast("JOIN", headID, NODE_ID);
-        nodeRole = ROLE_WAITING_STEADY_START;
-    }
-    // STEADY_START with schedule
-    else if (!strcmp(type, "STEADY_START") && nodeRole == ROLE_WAITING_STEADY_START)
-    {
-        nodeRole = ROLE_MEMBER;
-        steadyStateStarted = 1;
-        steadyStart = getMsCount();
-        // we already got our ASSIGN earlier, so nothing else here
-        printf("[%s] Steady‐state BEGIN\r\n", NODE_ID);
-    }
-    // DATA for CH to forward
+    // CH: forward DATA
     else if (!strcmp(type, "DATA") && nodeRole == ROLE_CLUSTER_HEAD)
     {
-        for (int i = 0; i < memberCount; i++)
+        // build a “except” fwd message:
+        char fwdData[MAX_MSG_LEN];
+        // prefix: EXCEPT=<srcEUI64>, then the original payload
+        snprintf(fwdData, sizeof(fwdData),
+                 "EXCEPT=%s,%s",
+                 src, data);
+
+        // log what we’re doing, including who we’re excluding
+        printf("[%s] FWD DATA → ALL except %s : %s\r\n",
+               NODE_ID, src, data);
+
+        broadcast("FWD", "ALL", fwdData);
+    }
+    else if (!strcmp(type, "FWD") && nodeRole == ROLE_MEMBER)
+    {
+        // data looks like "EXCEPT=<origID>,<payload…>"
+        if (strncmp(data, "EXCEPT=", 7) == 0)
         {
-            if (strcmp(memberList[i], src))
+            char *comma = strchr(data, ',');
+            if (!comma)
+                return;
+            *comma = '\0';
+            char *exceptID = data + 7; // the EUI64 to skip
+            char *payload = comma + 1; // actual forwarded data
+
+            // only print/process if it's *not* me
+            if (strcmp(exceptID, NODE_ID) != 0)
             {
-                printf("[%s] FWD DATA → %s\r\n",
-                       NODE_ID, memberList[i]);
-                broadcast("FWD", memberList[i], data);
+                printf("[%s] RX %-8s ← %s : %s\r\n",
+                       NODE_ID, "FWD", exceptID, payload);
             }
+            // else: it was me, so silently drop
         }
     }
-    // ROUND_COMPLETE ends everything
+    // any: end‐of‐round
     else if (!strcmp(type, "ROUND_COMPLETE"))
     {
-        printf("[%s] ROUND_COMPLETE → IDLE\r\n", NODE_ID);
         nodeRole = ROLE_IDLE;
-        steadyStateStarted = 0;
     }
 }
 
 //------------------------------------------------------------------------------
-// Poll UART non‑blocking
+// Non‑blocking UART poll
 //------------------------------------------------------------------------------
 static void processInput(void)
 {
@@ -278,8 +270,7 @@ static void processInput(void)
                 msgBuf[msgIdx++] = b;
             if (b == MSG_END)
             {
-                msgBuf[msgIdx] = '\0';
-                printf("msg: %s\r\n", msgBuf+1);
+                msgBuf[msgIdx] = 0;
                 handleMessage();
                 inMessage = 0;
             }
@@ -288,21 +279,23 @@ static void processInput(void)
 }
 
 //------------------------------------------------------------------------------
-// Election: decide CH vs JOIN
+// Randomized CH election
 //------------------------------------------------------------------------------
 static void electRole(void)
 {
-    uint32_t now = getMsCount();
-    if (lastCH && now - lastCH < ROUND_DURATION_MS)
-    {
-        nodeRole = ROLE_JOINING;
-        return;
-    }
+    // if (lastCH && now - lastCH < ROUND_DURATION_MS)
+    // {
+    //     nodeRole = ROLE_JOINING;
+    //     return;
+    // }
+
+    if (1 < (CH_PROBABILITY / 100.0f))
     // if (getRandomFloat() < (CH_PROBABILITY / 100.0f))
-    if (0 < (CH_PROBABILITY / 100.0f))
     {
         nodeRole = ROLE_CLUSTER_HEAD;
-        lastCH = now;
+        // lastCH = now;
+        lastCHAD = getMsCount();
+        memberCount = 0;
         printf("[%s] Elected CLUSTER_HEAD\r\n", NODE_ID);
     }
     else
@@ -313,93 +306,82 @@ static void electRole(void)
 }
 
 //------------------------------------------------------------------------------
-// Join‐phase: listen for CH_AD then send JOIN
+// JOIN phase
 //------------------------------------------------------------------------------
 static void joinCluster(void)
 {
-    uint32_t start = getMsCount();
-    lastCHAD = start;
-    printf("[%s] JOIN phase: waiting up to %lums\r\n",
-           NODE_ID, JOIN_WINDOW_MS);
-    while (getMsCount() - start < JOIN_WINDOW_MS &&
-           nodeRole == ROLE_JOINING)
+    uint32_t start = getMsCount(), deadline = start + JOIN_WINDOW_MS;
+    printf("[%s] JOIN phase: up to %lums\r\n",
+           NODE_ID, (unsigned long)JOIN_WINDOW_MS);
+    while (getMsCount() < deadline && nodeRole == ROLE_JOINING)
     {
         processInput();
-        // if CH disappears, abort
-        if (getMsCount() - lastCHAD > CH_AD_TIMEOUT_MS)
+        // give up if no CH_AD
+        if (getMsCount() - lastCHAD > JOIN_WINDOW_MS)
         {
-            printf("[%s] CH lost → IDLE\r\n", NODE_ID);
+            printf("[%s] No CH_AD → idle\r\n", NODE_ID);
             nodeRole = ROLE_IDLE;
             return;
         }
     }
     if (nodeRole == ROLE_JOINING)
     {
-        printf("[%s] JOIN timeout → IDLE\r\n", NODE_ID);
+        printf("[%s] JOIN timeout → idle\r\n", NODE_ID);
         nodeRole = ROLE_IDLE;
     }
 }
 
 //------------------------------------------------------------------------------
-// Member: send DATA up to MAX_SENDS
+// Member steady‑state
 //------------------------------------------------------------------------------
-static void sendMemberData(void)
+static void runMember(void)
 {
-    if (!steadyStateStarted || !mySlot || sendsThisRound >= MAX_SENDS_PER_ROUND)
-        return;
+    uint32_t roundEnd = steadyStart + ROUND_DURATION_MS;
+    sendsThisRound = 0;
 
-    // compute our interleaved send time
-    uint32_t slotIndex = mySlot + sendsThisRound * memberCount;
-    uint32_t target = steadyStart + slotIndex * NODE_DELAY_MS;
-
-    // spin until it's our turn
-    while (nodeRole == ROLE_MEMBER)
+    while (nodeRole == ROLE_MEMBER && getMsCount() < roundEnd)
     {
         processInput();
-
-        // CH must remain alive
+        // lost CH?
         if (getMsCount() - lastCHAD > CH_AD_TIMEOUT_MS)
         {
-            printf("[%s] CH timeout → IDLE\r\n", NODE_ID);
+            printf("[%s] Lost CH_AD → idle\r\n", NODE_ID);
             nodeRole = ROLE_IDLE;
             return;
         }
-
-        if (getMsCount() >= target)
+        // on our static slot
+        if (STATIC_SLOT > 0 && sendsThisRound < MAX_SENDS_PER_ROUND)
         {
-            exitSleep();
-            if (nodeRole != ROLE_MEMBER)
-                return;
-            int v = (int)(getRandomFloat() * 100);
-            char pl[24];
-            snprintf(pl, sizeof(pl), "%s,%d", NODE_ID, v);
-            printf("[%s] DATA slot%u → %d\r\n",
-                   NODE_ID, mySlot, v);
-            broadcast("DATA", headID, pl);
-            sendsThisRound++;
-            enterSleep();
-            return;
+            // use the actual member count, not MAX_MEMBERS
+            uint32_t slotIndex = STATIC_SLOT + sendsThisRound * memberCount;
+            uint32_t target = steadyStart + slotIndex * NODE_DELAY_MS;
+
+            if (getMsCount() >= target)
+            {
+                exitSleep();
+                if (nodeRole != ROLE_MEMBER)
+                    return;
+                int v = (int)(getRandomFloat() * 100);
+                char pl[24];
+                snprintf(pl, sizeof(pl), "%s,%d", NODE_ID, v);
+                printf("[%s] DATA slot%u → %d\r\n", NODE_ID, STATIC_SLOT, v);
+                broadcast("DATA", headID, pl);
+                sendsThisRound++;
+                enterSleep();
+            }
         }
         delayMs(10);
     }
 }
 
 //------------------------------------------------------------------------------
-// Cluster‐Head main
+// Cluster‐Head round
 //------------------------------------------------------------------------------
 static void runClusterHead(void)
 {
-    printf("[%s] Starting CH round, collecting JOINs\r\n", NODE_ID);
-
-    // reset for this round
-    memberCount = 0;
-    nextSlot = 1;
-    sendsThisRound = 0;
-    steadyStateStarted = 0;
-
-    // Election/Join window
     uint32_t joinEnd = getMsCount() + JOIN_WINDOW_MS;
-    lastCHAD = getMsCount();
+
+    // election / JOIN collection
     while (getMsCount() < joinEnd && nodeRole == ROLE_CLUSTER_HEAD)
     {
         processInput();
@@ -410,40 +392,23 @@ static void runClusterHead(void)
         }
     }
 
-    if (nodeRole != ROLE_CLUSTER_HEAD)
-        return;
-
     if (memberCount == 0)
     {
-        printf("[%s] No members → ROUND_COMPLETE\r\n", NODE_ID);
-        broadcast("ROUND_COMPLETE", "ALL", "none");
+        printf("[%s] No JOINs → end round\r\n", NODE_ID);
+        broadcast("ROUND_COMPLETE", "ALL", "no_members");
         nodeRole = ROLE_IDLE;
         return;
     }
 
-    // Build schedule string
-    char sched[MAX_MSG_LEN] = "";
-    int pos = 0;
-    for (int i = 0; i < memberCount; i++)
-    {
-        pos += snprintf(sched + pos, sizeof(sched) - pos,
-                        "%s:%d%s",
-                        memberList[i], i + 1,
-                        (i + 1 < memberCount) ? "," : "");
-    }
-
-    // Wait a bit, then launch steady‐state
-    delayMs(STEADY_START_DELAY_MS);
+    // steady‐state
     steadyStart = getMsCount();
-    steadyStateStarted = 1;
+    printf("[%s] Steady‐state start (%u members)\r\n",
+           NODE_ID, memberCount);
 
-    printf("[%s] Broadcast STEADY_START: %s\r\n", NODE_ID, sched);
-    broadcast("STEADY_START", "ALL", sched);
-
-    // Steady‐state window
-    uint32_t steadyEnd = steadyStart + ROUND_DURATION_MS;
     uint32_t nextAd = steadyStart;
-    while (nodeRole == ROLE_CLUSTER_HEAD && getMsCount() < steadyEnd)
+    uint32_t roundEnd = steadyStart + ROUND_DURATION_MS;
+
+    while (nodeRole == ROLE_CLUSTER_HEAD && getMsCount() < roundEnd)
     {
         processInput();
         if (getMsCount() >= nextAd)
@@ -453,32 +418,23 @@ static void runClusterHead(void)
         }
     }
 
-    // End‐of‐round
-    printf("[%s] Steady‐state over → ROUND_COMPLETE\r\n", NODE_ID);
-    broadcast("ROUND_COMPLETE", "ALL", "end");
-    nodeRole = ROLE_IDLE;
-}
-
-//------------------------------------------------------------------------------
-// Member main
-//------------------------------------------------------------------------------
-static void runMember(void)
-{
-    while (nodeRole == ROLE_WAITING_STEADY_START ||
-           nodeRole == ROLE_MEMBER)
+    // end‐round
+    if (nodeRole == ROLE_CLUSTER_HEAD)
     {
-        processInput();
-        if (nodeRole == ROLE_MEMBER)
-            sendMemberData();
+        broadcast("ROUND_COMPLETE", "ALL", "end");
+        nodeRole = ROLE_IDLE;
     }
 }
 
 //------------------------------------------------------------------------------
-// Full LEACH round
+// Main LEACH loop
 //------------------------------------------------------------------------------
 static void runRound(void)
 {
     printf("\r\n[%s] ===== NEW ROUND =====\r\n", NODE_ID);
+    memberCount = 0;
+    sendsThisRound = 0;
+
     electRole();
 
     if (nodeRole == ROLE_CLUSTER_HEAD)
@@ -488,8 +444,7 @@ static void runRound(void)
     else if (nodeRole == ROLE_JOINING)
     {
         joinCluster();
-        if (nodeRole == ROLE_WAITING_STEADY_START ||
-            nodeRole == ROLE_MEMBER)
+        if (nodeRole == ROLE_MEMBER)
         {
             runMember();
         }
@@ -499,16 +454,13 @@ static void runRound(void)
     delayMs(50);
 }
 
-//------------------------------------------------------------------------------
-// main
-//------------------------------------------------------------------------------
 int leach_main(void)
 {
     systemInitialize();
     delayMs(50);
-    fetchNodeID();
 
-    // seed RNG
+    fetchNodeID();
+    // seed rand
     uint32_t seed = getMsCount();
     for (int i = 0; i < 16; i++)
         seed ^= ((uint32_t)NODE_ID[i]) << (i % 24);
