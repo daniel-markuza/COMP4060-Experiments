@@ -10,12 +10,12 @@
 // Config
 // ---------------------------------------------------------------------------
 #define NODE_DELAY_MS 3000UL // slot length
-#define ROUND_DURATION_MS (17000UL)
+#define ROUND_DURATION_MS (20000UL)
 #define CH_PROBABILITY 25        // base % chance to be CH
-#define CH_AD_INTERVAL_MS 2000UL // head advert interval
+#define CH_AD_INTERVAL_MS 3000UL // head advert interval
 #define CH_AD_TIMEOUT_MS 4000UL  // member gives up if no CH_AD in this
 #define MIN_CH_INTERVAL_MS (ROUND_DURATION_MS)
-#define JOIN_WINDOW_MS 2000UL // 2 seconds to collect JOINs
+#define JOIN_WINDOW_MS 3000UL // 3 seconds to collect JOINs
 
 #define MAX_MEMBERS 10
 #define MAX_MSG_LEN 80
@@ -339,62 +339,97 @@ static void runRound(void)
 {
     printf("\r\n[%s] ======== NEW ROUND ========\r\n", NODE_ID);
     memberCount = mySlot = 0;
-    headID[0] = 0;
+    headID[0] = '\0';
 
+    // 1) Election
     electRole();
-    if (nodeRole == ROLE_JOINING)
-        joinCluster();
-
     if (nodeRole == ROLE_CLUSTER_HEAD)
     {
-        char sched[MAX_MSG_LEN] = {0};
+        printf("[%s] Elected CLUSTER_HEAD – opening join window (%lums)\r\n",
+               NODE_ID, JOIN_WINDOW_MS);
+
+        // 2) Join‑window: keep sending CH_AD and collect JOINs
+        uint32_t joinStart = getMsCount();
+        while (getMsCount() - joinStart < JOIN_WINDOW_MS)
+        {
+            processInput();
+            // periodic join‑window CH_AD
+            if (((getMsCount() - joinStart) % CH_AD_INTERVAL_MS) < 20)
+            {
+                printf("[%s] (join window) CH_AD →\r\n", NODE_ID);
+                broadcast("CH_AD", "ALL", "round");
+            }
+            delayMs(10);
+        }
+        printf("[%s] Join window closed – %d members joined\r\n",
+               NODE_ID, memberCount);
+
+        // 3) Build & broadcast schedule
+        char sched[MAX_MSG_LEN] = "";
         for (int i = 0; i < memberCount; i++)
         {
-            char piece[16];
+            char piece[20];
             snprintf(piece, sizeof(piece), "%s:%d",
                      memberList[i], i + 1);
-            strcat(sched, piece);
-            if (i < memberCount - 1)
+            if (i)
                 strcat(sched, ",");
+            strcat(sched, piece);
         }
         printf("[%s] Broadcasting SCHED: %s\r\n", NODE_ID, sched);
         broadcast("SCHED", "ALL", sched);
     }
+    else if (nodeRole == ROLE_JOINING)
+    {
+        printf("[%s] ROLE_JOINING – waiting full round for CH_AD…\r\n",
+               NODE_ID);
+        joinCluster();
+        if (nodeRole == ROLE_IDLE)
+            printf("[%s] ← no CH_AD heard, back to idle/election next round\r\n",
+                   NODE_ID);
+        else
+            printf("[%s] Joined head %s, now ROLE_MEMBER\r\n",
+                   NODE_ID, headID);
+    }
 
+    // 4) Steady‑state TDMA window
     steadyStart = getMsCount();
     nextAdTime = steadyStart;
-    printf("[%s] Entering steady-state window for %lums\r\n",
+    printf("[%s] Entering steady‑state for %lums\r\n",
            NODE_ID, ROUND_DURATION_MS);
 
     while ((getMsCount() - steadyStart) < ROUND_DURATION_MS && nodeRole != ROLE_IDLE)
     {
         processInput();
+
         if (nodeRole == ROLE_CLUSTER_HEAD)
         {
             uint32_t now = getMsCount();
             if (now >= nextAdTime)
             {
-                printf("[%s] periodic CH_AD\r\n", NODE_ID);
+                printf("[%s] periodic CH_AD →\r\n", NODE_ID);
                 broadcast("CH_AD", "ALL", "round");
                 nextAdTime += CH_AD_INTERVAL_MS;
             }
         }
         else if (nodeRole == ROLE_MEMBER)
         {
-            sendMemberData();
-            enterSleep();
+            sendMemberData(); // already prints when it actually sends
+            enterSleep();     // go back to sleep until FWD or ROUND_COMPLETE
         }
+
         delayMs(10);
     }
 
+    // 5) End of round
     if (nodeRole == ROLE_CLUSTER_HEAD)
     {
-        printf("[%s] ROUND_COMPLETE → broadcasting\r\n", NODE_ID);
+        printf("[%s] ROUND_COMPLETE → broadcasting end of round\r\n",
+               NODE_ID);
         broadcast("ROUND_COMPLETE", "ALL", "end");
     }
 
     nodeRole = ROLE_IDLE;
-    printf("[%s] Round done, transitioning to IDLE\r\n", NODE_ID);
+    printf("[%s] Round complete, transition to IDLE\r\n", NODE_ID);
     delayMs(1000);
 }
 
