@@ -12,7 +12,8 @@
         "utils.h": "c",
         "usb_uart_example.h": "c",
         "stdbool.h": "c",
-        "stdlib.h": "c"
+        "stdlib.h": "c",
+        "unistd.h": "c"
     },
     "files.exclude": {
         "**/.git": true,
