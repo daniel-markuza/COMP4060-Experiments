@@ -162,10 +162,18 @@ static void broadcast(const char *type, const char *dst, const char *data)
 //------------------------------------------------------------------------------
 static void handleMessage(const char *p)
 {
-    char type[16] = {0}, src[10] = {0}, dst[10] = {0}, data[32] = {0};
-    if (sscanf(p, "%15[^,],SRC=%9[^,],DST=%9[^,],DATA=%31[^<]",
+    char type[16] = {0};
+    char src[17] = {0}; // allow up to 16 hex digits + NUL
+    char dst[17] = {0}; // same
+    char data[32] = {0};
+
+    // read 15‐char type, then up to 16 chars for SRC and DST
+    if (sscanf(p,
+               "%15[^,],SRC=%16[^,],DST=%16[^,],DATA=%31[^<]",
                type, src, dst, data) != 4)
         return;
+
+    // only accept messages to us or to ALL
     if (strcmp(dst, NODE_ID) != 0 && strcmp(dst, "ALL") != 0)
         return;
 
@@ -188,7 +196,7 @@ static void handleMessage(const char *p)
         if (memberCount < MAX_MEMBERS)
         {
             strncpy(memberList[memberCount], src, 16);
-            memberList[memberCount][16] = 0;
+            memberList[memberCount][16] = '\0';
             memberCount++;
             printf("[%s] CH recorded JOIN from %s (#%u)\r\n",
                    NODE_ID, src, memberCount);
@@ -197,13 +205,15 @@ static void handleMessage(const char *p)
     else if (strcmp(type, "SCHED") == 0 && nodeRole == ROLE_MEMBER)
     {
         printf("[%s] Got SCHED: %s\r\n", NODE_ID, data);
-        char *q = (char *)data;
+        char *q = data;
         while (q)
         {
-            char id[10];
+            char id[17];
             int slot;
-            if (sscanf(q, "%9[^:]:%d", id, &slot) == 2 && strcmp(id, NODE_ID) == 0)
+            if (sscanf(q, "%16[^:]:%d", id, &slot) == 2 && strcmp(id, NODE_ID) == 0)
+            {
                 mySlot = slot;
+            }
             q = strchr(q, ',');
             if (q)
                 q++;
@@ -270,7 +280,8 @@ static void electRole(void)
         nodeRole = ROLE_JOINING;
         return;
     }
-    if (getRandomFloat() < CH_PROBABILITY / 100.0f)
+    if (1 < CH_PROBABILITY / 100.0f)
+    // if (getRandomFloat() < CH_PROBABILITY / 100.0f)
     {
         nodeRole = ROLE_CLUSTER_HEAD;
         lastCH = now;
